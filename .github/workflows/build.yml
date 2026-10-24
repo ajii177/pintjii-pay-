@@ -1,0 +1,39 @@
+
+name: Build PINJII PAY APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter app
+        run: flutter create pinjii_pay --org com.pinjii.pay --platforms android
+
+      - name: Build APK
+        run: |
+          cd pinjii_pay
+          flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinjii-pay-apk
+          path: pinjii_pay/build/app/outputs/flutter-apk/app-release.apk
+
+
+          
