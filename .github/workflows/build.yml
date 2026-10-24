@@ -32,6 +32,19 @@ jobs:
           sed -i 's/android:label="[^"]*"/android:label="PINTJI PAY"/' \
             pintji_pay/android/app/src/main/AndroidManifest.xml
             
+      - name: Build release APK
+        run: |
+          cd pintji_pay
+          flutter pub get
+          flutter build apk --release
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PINTJI-PAY-APK
+          path: pintji_pay/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          
 void main() => runApp(const PintjiPay());
 
 const blue = Color(0xFF1769FF);
