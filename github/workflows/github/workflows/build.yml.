@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java
@@ -27,14 +27,44 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
       - name: Create Flutter project
         run: |
-          flutter create --org com.pintjipay --project-name pintji_pay --platforms android pintji_pay
+          flutter create \
+            --org com.pintjipay \
+            --project-name pintji_pay \
+            pintji_pay
 
-      - name: Create PINTJI PAY app
+      - name: Configure app
+        working-directory: pintji_pay
         run: |
-          cat > pintji_pay/lib/main.dart <<'DART'
+          cat > pubspec.yaml <<'EOF'
+          name: pintji_pay
+          description: PINTJI PAY digital marketplace demo
+          publish_to: none
+          version: 0.1.0+1
+
+          environment:
+            sdk: '>=3.4.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^4.0.0
+
+          flutter:
+            uses-material-design: true
+          EOF
+
+      - name: Write demo application
+        working-directory: pintji_pay
+        run: |
+          cat > lib/main.dart <<'DART'
           import 'package:flutter/material.dart';
 
           void main() => runApp(const PintjiPay());
@@ -48,16 +78,43 @@ jobs:
                 debugShowCheckedModeBanner: false,
                 title: 'PINTJI PAY',
                 theme: ThemeData(
-                  colorScheme: ColorScheme.fromSeed(
-                    seedColor: const Color(0xFF1769E0),
-                  ),
-                  scaffoldBackgroundColor: const Color(0xFFF3F7FD),
                   useMaterial3: true,
+                  colorScheme: ColorScheme.fromSeed(
+                    seedColor: const Color(0xFF2764F5),
+                    brightness: Brightness.light,
+                  ),
+                  scaffoldBackgroundColor: const Color(0xFFF5F7FC),
                 ),
                 home: const HomePage(),
               );
             }
           }
+
+          class Product {
+            final String name;
+            final String category;
+            final String description;
+            final int price;
+            const Product(
+              this.name, this.category, this.description, this.price,
+            );
+          }
+
+          const products = <Product>[
+            Product('Mobile Legends', 'Game', 'Voucher game demo', 15000),
+            Product('Free Fire', 'Game', 'Voucher game demo', 12000),
+            Product('PUBG Mobile', 'Game', 'Voucher game demo', 20000),
+            Product('Pulsa 10.000', 'Pulsa', 'Nominal simulasi', 11000),
+            Product('Pulsa 25.000', 'Pulsa', 'Nominal simulasi', 26000),
+            Product('Data 3 GB', 'Paket Data', 'Paket simulasi', 15000),
+            Product('Data 8 GB', 'Paket Data', 'Paket simulasi', 28000),
+          ];
+
+          String rupiah(int value) =>
+              'Rp${value.toString().replaceAllMapped(
+                RegExp(r'\B(?=(\d{3})+(?!\d))'),
+                (m) => '.',
+              )}';
 
           class HomePage extends StatefulWidget {
             const HomePage({super.key});
@@ -67,61 +124,19 @@ jobs:
           }
 
           class _HomePageState extends State<HomePage> {
-            int tab = 0;
-            int balance = 250000;
-
-            final services = const [
-              ['Transfer', Icons.send_rounded],
-              ['QRIS', Icons.qr_code_2_rounded],
-              ['Tagihan', Icons.receipt_long_rounded],
-              ['Pulsa/Data', Icons.phone_android_rounded],
-              ['Token Listrik', Icons.bolt_rounded],
-              ['Reksa Dana', Icons.trending_up_rounded],
-              ['Top Up', Icons.add_card_rounded],
-              ['Keamanan', Icons.shield_outlined],
-            ];
-
-            String rupiah(int n) {
-              final s = n.toString();
-              final result = StringBuffer();
-              for (int i = 0; i < s.length; i++) {
-                result.write(s[i]);
-                final left = s.length - i - 1;
-                if (left > 0 && left % 3 == 0) result.write('.');
-              }
-              return 'Rp$result';
-            }
-
-            void showService(String name) {
-              if (name == 'Top Up') {
-                setState(() => balance += 50000);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Top Up demo +Rp50.000'),
-                  ),
-                );
-              } else {
-                showDialog<void>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: Text(name),
-                    content: Text(
-                      '$name masih berupa demo. '
-                      'Pembayaran asli belum terhubung.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Tutup'),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            }
+            String category = 'Semua';
+            String query = '';
+            final List<String> orders = [];
 
             @override
             Widget build(BuildContext context) {
+              final filtered = products.where((p) {
+                final matchesCategory =
+                    category == 'Semua' || p.category == category;
+                return matchesCategory &&
+                    p.name.toLowerCase().contains(query.toLowerCase());
+              }).toList();
+
               return Scaffold(
                 appBar: AppBar(
                   title: const Text(
@@ -130,178 +145,244 @@ jobs:
                   ),
                   actions: [
                     IconButton(
-                      onPressed: () => showService('Notifikasi'),
-                      icon: const Icon(Icons.notifications_none),
+                      tooltip: 'Riwayat pesanan',
+                      onPressed: showOrders,
+                      icon: const Icon(Icons.receipt_long),
                     ),
                   ],
                 ),
-                body: IndexedStack(
-                  index: tab,
+                body: ListView(
+                  padding: const EdgeInsets.all(16),
                   children: [
-                    ListView(
-                      padding: const EdgeInsets.all(18),
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(24),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [
-                                Color(0xFF123A72),
-                                Color(0xFF1769E0),
-                              ],
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF1747C8), Color(0xFF4385FF)],
+                        ),
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'BELANJA PRODUK DIGITAL',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.bold,
                             ),
-                            borderRadius: BorderRadius.circular(24),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'TOTAL SALDO DEMO',
-                                style: TextStyle(color: Colors.white70),
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                rupiah(balance),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 18),
-                              const Text(
-                                'Akun simulasi • Bukan uang asli',
-                                style: TextStyle(color: Colors.white70),
-                              ),
-                              const SizedBox(height: 16),
-                              FilledButton.icon(
-                                onPressed: () => showService('Top Up'),
-                                icon: const Icon(Icons.add),
-                                label: const Text('Top Up Demo'),
-                              ),
-                            ],
+                          SizedBox(height: 10),
+                          Text(
+                            'Satu aplikasi,\nbanyak kebutuhan.',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 25,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
+                          SizedBox(height: 10),
+                          Text(
+                            'MODE DEMO • TANPA UANG ASLI',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    TextField(
+                      onChanged: (v) => setState(() => query = v),
+                      decoration: InputDecoration(
+                        hintText: 'Cari game, pulsa, paket data...',
+                        prefixIcon: const Icon(Icons.search),
+                        filled: true,
+                        fillColor: Colors.white,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
                         ),
-                        const SizedBox(height: 26),
-                        const Text(
-                          'Menu utama',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        GridView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: services.length,
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            mainAxisSpacing: 18,
-                            crossAxisSpacing: 8,
-                            childAspectRatio: 0.72,
-                          ),
-                          itemBuilder: (context, index) {
-                            final item = services[index];
-                            return InkWell(
-                              onTap: () => showService(item[0] as String),
-                              child: Column(
-                                children: [
-                                  Container(
-                                    width: 56,
-                                    height: 56,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(18),
-                                    ),
-                                    child: Icon(
-                                      item[1] as IconData,
-                                      color: const Color(0xFF1769E0),
-                                      size: 28,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    item[0] as String,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(fontSize: 11),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 24),
-                        const Text(
-                          'Aktivitas terbaru',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Card(
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 8,
+                      children: ['Semua', 'Game', 'Pulsa', 'Paket Data']
+                          .map((c) => ChoiceChip(
+                                label: Text(c),
+                                selected: category == c,
+                                onSelected: (_) =>
+                                    setState(() => category = c),
+                              ))
+                          .toList(),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Katalog produk',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    ...filtered.map((p) => Card(
+                          color: Colors.white,
+                          elevation: 0,
                           child: ListTile(
-                            leading: Icon(Icons.add_circle_outline),
-                            title: Text('Saldo awal demo'),
-                            subtitle: Text('Transaksi simulasi'),
-                            trailing: Text('+Rp250.000'),
+                            contentPadding: const EdgeInsets.all(12),
+                            leading: CircleAvatar(
+                              backgroundColor: const Color(0xFFE8EEFF),
+                              child: Icon(
+                                p.category == 'Game'
+                                    ? Icons.sports_esports
+                                    : p.category == 'Pulsa'
+                                        ? Icons.phone_android
+                                        : Icons.wifi,
+                                color: const Color(0xFF245BE8),
+                              ),
+                            ),
+                            title: Text(
+                              p.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Text(
+                              '${p.description}\n${rupiah(p.price)} • Harga demo',
+                            ),
+                            isThreeLine: true,
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => buy(p),
                           ),
-                        ),
-                      ],
-                    ),
-                    const Center(
-                      child: Text(
-                        'Riwayat transaksi demo',
-                        style: TextStyle(fontSize: 18),
-                      ),
-                    ),
-                    const Center(
-                      child: Text(
-                        'Akun PINTJI PAY\nVersi prototipe',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 20),
-                      ),
+                        )),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Demo saja. Produk dan harga bukan penawaran transaksi asli.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.black54, fontSize: 12),
                     ),
                   ],
                 ),
-                bottomNavigationBar: NavigationBar(
-                  selectedIndex: tab,
-                  onDestinationSelected: (value) {
-                    setState(() => tab = value);
-                  },
-                  destinations: const [
-                    NavigationDestination(
-                      icon: Icon(Icons.home_outlined),
-                      label: 'Beranda',
+              );
+            }
+
+            Future<void> buy(Product p) async {
+              final target = TextEditingController();
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: Text('Pesan ${p.name}'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Harga simulasi: ${rupiah(p.price)}'),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: target,
+                        decoration: const InputDecoration(
+                          labelText: 'ID game / nomor tujuan',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Tidak ada pembayaran atau pengiriman produk asli.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text('Batal'),
                     ),
-                    NavigationDestination(
-                      icon: Icon(Icons.receipt_long_outlined),
-                      label: 'Aktivitas',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.person_outline),
-                      label: 'Akun',
+                    FilledButton(
+                      onPressed: () {
+                        if (target.text.trim().isNotEmpty) {
+                          Navigator.pop(dialogContext, true);
+                        }
+                      },
+                      child: const Text('Buat pesanan demo'),
                     ),
                   ],
+                ),
+              );
+
+              if (ok == true && mounted) {
+                setState(() {
+                  orders.insert(
+                    0,
+                    '${p.name} • ${rupiah(p.price)} • DEMO',
+                  );
+                });
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Pesanan demo dibuat, tidak ada transaksi.'),
+                  ),
+                );
+              }
+              target.dispose();
+            }
+
+            void showOrders() {
+              showModalBottomSheet<void>(
+                context: context,
+                showDragHandle: true,
+                builder: (context) => SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: SizedBox(
+                      height: 300,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Riwayat pesanan demo',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Expanded(
+                            child: orders.isEmpty
+                                ? const Center(
+                                    child: Text('Belum ada pesanan demo.'),
+                                  )
+                                : ListView(
+                                    children: orders
+                                        .map((o) => ListTile(
+                                              leading: const Icon(
+                                                Icons.receipt_long,
+                                              ),
+                                              title: Text(o),
+                                            ))
+                                        .toList(),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               );
             }
           }
           DART
 
-      - name: Install dependencies
-        run: cd pintji_pay && flutter pub get
+      - name: Get dependencies
+        working-directory: pintji_pay
+        run: flutter pub get
 
-      - name: Analyze
-        run: cd pintji_pay && flutter analyze
+      - name: Build release APK
+        working-directory: pintji_pay
+        run: flutter build apk --release
 
-      - name: Build APK
-        run: cd pintji_pay && flutter build apk --release
-
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PINTJI-PAY-APK
+          name: PINTJI-PAY-DEMO-APK
           path: pintji_pay/build/app/outputs/flutter-apk/app-release.apk
-          
+          if-no-files-found: error
+          retention-days: 7
