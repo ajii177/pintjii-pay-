@@ -1,10 +1,10 @@
 
-name: Build PINJII PAY APK
+name: Build PINTJI PAY APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -21,19 +21,277 @@ jobs:
         with:
           channel: stable
 
-      - name: Create Flutter app
-        run: flutter create pinjii_pay --org com.pinjii.pay --platforms android
+      - name: Create project
+        run: flutter create --org com.pintjipay --project-name pintji_pay --platforms android pintji_paimport 'package:flutter/material.dart';
 
-      - name: Build APK
+      - name: Install app source
+        run: cp app_main.dart pintji_pay/lib/main.dart
+
+      - name: Set app label
         run: |
-          cd pinjii_pay
-          flutter build apk --release
+          sed -i 's/android:label="[^"]*"/android:label="PINTJI PAY"/' \
+            pintji_pay/android/app/src/main/AndroidManifest.xml
+            
+void main() => runApp(const PintjiPay());
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: pinjii-pay-apk
-          path: pinjii_pay/build/app/outputs/flutter-apk/app-release.apk
+const blue = Color(0xFF1769FF);
+const pale = Color(0xFFF2F6FF);
 
+class PintjiPay extends StatelessWidget {
+  const PintjiPay({super.key});
 
-          
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'PINTJI PAY',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: blue),
+        scaffoldBackgroundColor: pale,
+        useMaterial3: true,
+      ),
+      home: const HomePage(),
+    );
+  }
+}
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  int tab = 0;
+  final money = 'Rp1.250.000';
+
+  @override
+  Widget build(BuildContext context) {
+    final pages = [
+      dashboard(),
+      services('Aktivitas', [
+        'Top up saldo',
+        'Transfer',
+        'Tarik saldo',
+        'Riwayat transaksi',
+      ]),
+      services('Investasi', [
+        'Reksa dana pasar uang',
+        'Reksa dana pendapatan tetap',
+        'Reksa dana saham',
+        'Simulasi keuntungan',
+      ]),
+      services('Akun', [
+        'Profil pengguna',
+        'Keamanan dan PIN',
+        'Pengaturan notifikasi',
+        'Pusat bantuan',
+      ]),
+    ];
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        title: const Text(
+          'PINTJI PAY',
+          style: TextStyle(
+            color: blue,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        actions: [
+          IconButton(
+            onPressed: () => notice('Belum ada notifikasi'),
+            icon: const Icon(Icons.notifications_none),
+          ),
+        ],
+      ),
+      body: pages[tab],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: tab,
+        onDestinationSelected: (v) {
+          setState(() => tab = v);
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            label: 'Beranda',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.receipt_long),
+            label: 'Aktivitas',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.trending_up),
+            label: 'Investasi',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            label: 'Akun',
+          ),
+        ],
+      ),
+    );
+  }
+}
+  Widget dashboard() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [blue, Color(0xFF58A0FF)],
+            ),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'TOTAL SALDO',
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                money,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 30,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'PINTJI PAY WALLET',
+                style: TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 22),
+        const Text(
+          'Layanan utama',
+          style: TextStyle(
+            fontSize: 19,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        GridView.count(
+          crossAxisCount: 3,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          children: [
+            service(Icons.add_card, 'Top up', 'Top up saldo'),
+            service(Icons.send, 'Transfer', 'Transfer'),
+            service(Icons.account_balance, 'Bank', 'Transfer bank'),
+            service(Icons.qr_code, 'QRIS', 'Pembayaran QRIS'),
+            service(Icons.phone_android, 'Pulsa', 'Pulsa dan data'),
+            service(Icons.bolt, 'Tagihan', 'Tagihan'),
+          ],
+        ),
+        const SizedBox(height: 18),
+        const Text(
+          'Ringkasan keuangan',
+          style: TextStyle(
+            fontSize: 19,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        cardRow(Icons.arrow_downward, 'Uang masuk', 'Rp500.000'),
+        cardRow(Icons.arrow_upward, 'Uang keluar', 'Rp150.000'),
+        const SizedBox(height: 12),
+        const Text(
+          'Mode demo — saldo bukan uang sungguhan.',
+          style: TextStyle(color: Colors.black54, fontSize: 12),
+        ),
+      ],
+    );
+  }
+  
+  Widget service(IconData icon, String label, String action) {
+    return InkWell(
+      onTap: () => notice('$action — fitur demo'),
+      borderRadius: BorderRadius.circular(16),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Icon(icon, color: blue, size: 28),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget cardRow(IconData icon, String title, String amount) {
+    return Card(
+      color: Colors.white,
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: pale,
+          child: Icon(icon, color: blue),
+        ),
+        title: Text(title),
+        trailing: Text(
+          amount,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+  
+  Widget services(String title, List<String> items) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        for (final item in items)
+          Card(
+            color: Colors.white,
+            child: ListTile(
+              leading: const Icon(
+                Icons.circle_outlined,
+                color: blue,
+              ),
+              title: Text(item),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => notice('$item — fitur demo'),
+            ),
+          ),
+        const Padding(
+          padding: EdgeInsets.all(12),
+          child: Text(
+            'Fitur masih simulasi. Belum terhubung ke '
+            'bank, penyedia pembayaran, atau manajer investasi.',
+          ),
+        ),
+      ],
+    );
+  }
+
+  void notice(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+  
