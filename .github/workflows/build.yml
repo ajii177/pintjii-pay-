@@ -1,10 +1,10 @@
 
-name: Build PINTJI PAY APK
+name: PINTJI PAY v0.3 Demo
 
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main]
 
 permissions:
   contents: read
@@ -17,37 +17,558 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      - name: Create Flutter project
+      - name: Create Flutter app
         run: |
-          flutter create \
-            --org com.pintjipay \
-            --project-name pintji_pay \
-            --platforms android \
-            pintji_pay
+          flutter create --platforms=android pintji_pay
+          cd pintji_pay
+          flutter pub add supabase_flutter
 
-      - name: Install PINTJI PAY source
-        run: cp app_main.dart pintji_pay/lib/main.dart
-
-      - name: Set application name
-        run: |
-          sed -i 's/android:label="[^"]*"/android:label="PINTJI PAY"/' \
-            pintji_pay/android/app/src/main/AndroidManifest.xml
-
-      - name: Build release APK
+      - name: Create PINTJI PAY app
         run: |
           cd pintji_pay
-          flutter pub get
-          flutter build apk --release
+          cat > lib/main.dart <<'DART'
+          import 'package:flutter/material.dart';
+          import 'package:supabase_flutter/supabase_flutter.dart';
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PINTJI-PAY-APK
-          path: pintji_pay/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          
+          const supabaseUrl =
+              'https://mnzkwajngdkwrylammqj.supabase.co';
+
+          Future<void> main() async {
+            WidgetsFlutterBinding.ensureInitialized();
+
+            const key = String.fromEnvironment(
+              'SUPABASE_PUBLISHABLE_KEY',
+            );
+
+            if (key.isNotEmpty) {
+              await Supabase.initialize(
+                url: supabaseUrl,
+                anonKey: key,
+              );
+            }
+
+            runApp(const PintjiPayApp());
+          }
+
+          class PintjiPayApp extends StatelessWidget {
+            const PintjiPayApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'PINTJI PAY',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  colorScheme: ColorScheme.fromSeed(
+                    seedColor: const Color(0xFF1769FF),
+                  ),
+                  useMaterial3: true,
+                ),
+                home: const MainPage(),
+              );
+            }
+          }
+
+          class Product {
+            Product({
+              required this.name,
+              required this.category,
+              required this.price,
+            });
+
+            final String name;
+            final String category;
+            final int price;
+          }
+
+          class MainPage extends StatefulWidget {
+            const MainPage({super.key});
+
+            @override
+            State<MainPage> createState() => _MainPageState();
+          }
+
+          class _MainPageState extends State<MainPage> {
+            int tab = 0;
+            String category = 'Semua';
+            String query = '';
+            final orders = <String>[];
+            final complaints = <String>[];
+            final products = <Product>[
+              Product(
+                name: 'Pulsa 10.000',
+                category: 'Pulsa',
+                price: 10000,
+              ),
+              Product(
+                name: 'Paket Data Demo',
+                category: 'Data',
+                price: 15000,
+              ),
+              Product(
+                name: 'Voucher Game Demo',
+                category: 'Game',
+                price: 20000,
+              ),
+            ];
+
+            Future<List<Product>> loadProducts() async {
+              if (!Supabase.instance.isInitialized) {
+                return products;
+              }
+
+              final rows = await Supabase.instance.client
+                  .from('products')
+                  .select('name, category, price')
+                  .eq('is_active', true);
+
+              return rows.map<Product>((row) {
+                return Product(
+                  name: row['name'] as String,
+                  category: row['category'] as String,
+                  price: (row['price'] as num).toInt(),
+                );
+              }).toList();
+            }
+
+            String rupiah(int value) {
+              final digits = value.toString();
+              final out = StringBuffer();
+              for (var i = 0; i < digits.length; i++) {
+                if (i > 0 && (digits.length - i) % 3 == 0) {
+                  out.write('.');
+                }
+                out.write(digits[i]);
+              }
+              return 'Rp$out';
+            }
+
+            void message(String text) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(text)),
+              );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final titles = [
+                'Beranda',
+                'Katalog',
+                'Pesanan',
+                'Dashboard Penjual',
+                'Pengaduan',
+              ];
+
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text(
+                    'PINTJI PAY',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  actions: [
+                    IconButton(
+                      tooltip: 'Status demo',
+                      onPressed: () => message(
+                        'Mode demo: belum ada pembayaran nyata.',
+                      ),
+                      icon: const Icon(Icons.info_outline),
+                    ),
+                  ],
+                ),
+                body: IndexedStack(
+                  index: tab,
+                  children: [
+                    home(),
+                    catalog(),
+                    orderPage(),
+                    sellerPage(),
+                    complaintPage(),
+                  ],
+                ),
+                bottomNavigationBar: NavigationBar(
+                  selectedIndex: tab,
+                  onDestinationSelected: (value) {
+                    setState(() => tab = value);
+                  },
+                  destinations: const [
+                    NavigationDestination(
+                      icon: Icon(Icons.home_outlined),
+                      label: 'Beranda',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.grid_view),
+                      label: 'Katalog',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.receipt_long),
+                      label: 'Pesanan',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.storefront),
+                      label: 'Penjual',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.support_agent),
+                      label: 'Bantuan',
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            Widget home() {
+              return ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(22),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Halo! Selamat datang'),
+                        SizedBox(height: 8),
+                        Text(
+                          'PINTJI PAY',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'Belanja produk digital dalam mode demo.',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Layanan',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      service(Icons.phone_android, 'Pulsa'),
+                      service(Icons.wifi, 'Data'),
+                      service(Icons.sports_esports, 'Game'),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Informasi',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const Text(
+                    'Saldo dan pembayaran nyata belum tersedia.',
+                  ),
+                ],
+              );
+            }
+
+            Widget service(IconData icon, String label) {
+              return SizedBox(
+                width: 100,
+                child: Card(
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () {
+                      setState(() {
+                        category = label == 'Pulsa'
+                            ? 'Pulsa'
+                            : label == 'Data'
+                                ? 'Data'
+                                : 'Game';
+                        tab = 1;
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          Icon(icon, size: 30),
+                          const SizedBox(height: 8),
+                          Text(label),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            Widget catalog() {
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Cari produk...',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (value) {
+                        setState(() => query = value);
+                      },
+                    ),
+                  ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final c in [
+                          'Semua',
+                          'Pulsa',
+                          'Data',
+                          'Game',
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                            ),
+                            child: ChoiceChip(
+                              label: Text(c),
+                              selected: category == c,
+                              onSelected: (_) {
+                                setState(() => category = c);
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: FutureBuilder<List<Product>>(
+                      future: loadProducts(),
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return const Center(
+                            child: Text(
+                              'Katalog gagal dimuat. Periksa konfigurasi Supabase.',
+                            ),
+                          );
+                        }
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+
+                        final list = (snapshot.data ?? products)
+                            .where((p) =>
+                                (category == 'Semua' ||
+                                    p.category.toLowerCase() ==
+                                        category.toLowerCase()) &&
+                                p.name.toLowerCase().contains(
+                                      query.toLowerCase(),
+                                    ))
+                            .toList();
+
+                        if (list.isEmpty) {
+                          return const Center(
+                            child: Text('Produk tidak ditemukan.'),
+                          );
+                        }
+
+                        return ListView.builder(
+                          itemCount: list.length,
+                          itemBuilder: (context, index) {
+                            final p = list[index];
+                            return Card(
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 5,
+                              ),
+                              child: ListTile(
+                                leading: const CircleAvatar(
+                                  child: Icon(Icons.shopping_bag),
+                                ),
+                                title: Text(p.name),
+                                subtitle: Text(p.category),
+                                trailing: Text(rupiah(p.price)),
+                                onTap: () => showProduct(p),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            void showProduct(Product p) {
+              showModalBottomSheet<void>(
+                context: context,
+                builder: (context) => Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        p.name,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(p.category),
+                      Text(rupiah(p.price)),
+                      const SizedBox(height: 18),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          onPressed: () {
+                            setState(() {
+                              orders.add(
+                                '${p.name} — ${rupiah(p.price)} — SIMULASI',
+                              );
+                            });
+                            Navigator.pop(context);
+                            message(
+                              'Pesanan demo dibuat. Tidak ada uang yang dibayarkan.',
+                            );
+                          },
+                          child: const Text('Checkout simulasi'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            Widget orderPage() {
+              if (orders.isEmpty) {
+                return const Center(
+                  child: Text('Belum ada pesanan demo.'),
+                );
+              }
+              return ListView(
+                padding: const EdgeInsets.all(12),
+                children: [
+                  for (final order in orders)
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.receipt_long),
+                        title: Text(order),
+                        subtitle: const Text(
+                          'Status: SIMULASI — belum dibayar',
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            }
+
+            Widget sellerPage() {
+              return ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  const Text(
+                    'Dashboard Penjual',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Demo lokal. Belum ada autentikasi atau '
+                    'penyimpanan penjual di backend.',
+                  ),
+                  const SizedBox(height: 18),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.inventory_2),
+                      title: const Text('Kelola katalog demo'),
+                      subtitle: Text(
+                        '${products.length} produk contoh',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: manageProducts,
+                    ),
+                  ),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.receipt_long),
+                      title: const Text('Pesanan masuk'),
+                      subtitle: Text(
+                        '${orders.length} pesanan simulasi',
+                      ),
+                    ),
+                  ),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.report_problem),
+                      title: const Text('Pengaduan'),
+                      subtitle: Text(
+                        '${complaints.length} pengaduan demo',
+                      ),
+                      onTap: () => setState(() => tab = 4),
+                    ),
+                  ),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.gpp_maybe),
+                      title: const Text('Pembatasan akun'),
+                      subtitle: const Text(
+                        'Belum aktif — memerlukan admin terautentikasi',
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            void manageProducts() {
+              final name = TextEditingController();
+              final price = TextEditingController();
+              String cat = 'Game';
+
+              showDialog<void>(
+                context: context,
+                builder: (dialogContext) => StatefulBuilder(
+                  builder: (context, setDialog) => AlertDialog(
+                    title: const Text('Tambah produk demo'),
+                    content: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextField(
+                            controller: name,
+                            decoration: const InputDecoration(
+                              labelText: 'Nama produk',
+                            ),
+                          ),
+                          TextField(
+                            controller: price,
+                            keyboardType: TextInputType.number,
+                            decoration
