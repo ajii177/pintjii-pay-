@@ -1,5 +1,5 @@
 
-name: PINTJI PAY v0.3 Demo
+name: PINTJI PAY v0.4 Security
 
 on:
   workflow_dispatch:
@@ -34,36 +34,44 @@ jobs:
           flutter create --platforms=android pintji_pay
           cd pintji_pay
           flutter pub add supabase_flutter
+          flutter pub add local_auth
 
-      - name: Create PINTJI PAY app
+      - name: Create PINTJI PAY v0.4
         run: |
           cd pintji_pay
           cat > lib/main.dart <<'DART'
           import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
+          import 'package:flutter/widgets.dart';
+          import 'package:local_auth/local_auth.dart';
           import 'package:supabase_flutter/supabase_flutter.dart';
 
           const supabaseUrl =
               'https://mnzkwajngdkwrylammqj.supabase.co';
 
+          bool supabaseReady = false;
+
           Future<void> main() async {
             WidgetsFlutterBinding.ensureInitialized();
-
             const key = String.fromEnvironment(
               'SUPABASE_PUBLISHABLE_KEY',
             );
 
             if (key.isNotEmpty) {
-              await Supabase.initialize(
-                url: supabaseUrl,
-                anonKey: key,
-              );
+              try {
+                await Supabase.initialize(
+                  url: supabaseUrl,
+                  anonKey: key,
+                );
+                supabaseReady = true;
+              } catch (_) {}
             }
 
-            runApp(const PintjiPayApp());
+            runApp(const PintjiApp());
           }
 
-          class PintjiPayApp extends StatelessWidget {
-            const PintjiPayApp({super.key});
+          class PintjiApp extends StatelessWidget {
+            const PintjiApp({super.key});
 
             @override
             Widget build(BuildContext context) {
@@ -76,18 +84,240 @@ jobs:
                   ),
                   useMaterial3: true,
                 ),
-                home: const MainPage(),
+                home: const AuthGate(),
+              );
+            }
+          }
+
+          class AuthGate extends StatelessWidget {
+            const AuthGate({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              if (!supabaseReady) {
+                return const LoginPage();
+              }
+
+              return StreamBuilder<AuthState>(
+                stream: Supabase.instance.client.auth.onAuthStateChange,
+                builder: (context, snapshot) {
+                  final user =
+                      Supabase.instance.client.auth.currentUser;
+                  if (user == null) return const LoginPage();
+                  return const MainPage();
+                },
+              );
+            }
+          }
+
+          class LoginPage extends StatefulWidget {
+            const LoginPage({super.key});
+
+            @override
+            State<LoginPage> createState() => _LoginPageState();
+          }
+
+          class _LoginPageState extends State<LoginPage> {
+            final email = TextEditingController();
+            final password = TextEditingController();
+            final name = TextEditingController();
+            bool register = false;
+            bool busy = false;
+            bool hidePassword = true;
+            String notice = '';
+
+            Future<void> submit() async {
+              if (!supabaseReady) {
+                setState(() {
+                  notice = 'Supabase belum dikonfigurasi. '
+                      'Periksa GitHub Actions secret.';
+                });
+                return;
+              }
+
+              if (email.text.trim().isEmpty ||
+                  password.text.length < 8) {
+                setState(() {
+                  notice = 'Masukkan email dan password minimal 8 karakter.';
+                });
+                return;
+              }
+
+              setState(() {
+                busy = true;
+                notice = '';
+              });
+
+              try {
+                final auth = Supabase.instance.client.auth;
+
+                if (register) {
+                  await auth.signUp(
+                    email: email.text.trim(),
+                    password: password.text,
+                    data: {
+                      'display_name': name.text.trim(),
+                    },
+                  );
+                  if (mounted) {
+                    setState(() {
+                      notice = 'Pendaftaran dikirim. '
+                          'Jika verifikasi email aktif, cek email kamu.';
+                    });
+                  }
+                } else {
+                  await auth.signInWithPassword(
+                    email: email.text.trim(),
+                    password: password.text,
+                  );
+                }
+              } on AuthException catch (e) {
+                if (mounted) {
+                  setState(() => notice = e.message);
+                }
+              } catch (_) {
+                if (mounted) {
+                  setState(() => notice = 'Terjadi kesalahan. Coba lagi.');
+                }
+              } finally {
+                if (mounted) setState(() => busy = false);
+              }
+            }
+
+            @override
+            void dispose() {
+              email.dispose();
+              password.dispose();
+              name.dispose();
+              super.dispose();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                body: Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Icon(
+                            Icons.shield_moon,
+                            size: 64,
+                            color: Color(0xFF1769FF),
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'PINTJI PAY',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Text(
+                            'v0.4 • Account Security',
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 28),
+                          if (!supabaseReady)
+                            const Card(
+                              child: Padding(
+                                padding: EdgeInsets.all(12),
+                                child: Text(
+                                  'Supabase belum siap. Login sungguhan '
+                                  'memerlukan publishable key di GitHub '
+                                  'Actions Secrets.',
+                                ),
+                              ),
+                            ),
+                          if (register)
+                            TextField(
+                              controller: name,
+                              decoration: const InputDecoration(
+                                labelText: 'Nama tampilan',
+                                prefixIcon: Icon(Icons.person_outline),
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: email,
+                            keyboardType: TextInputType.emailAddress,
+                            decoration: const InputDecoration(
+                              labelText: 'Email',
+                              prefixIcon: Icon(Icons.email_outlined),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: password,
+                            obscureText: hidePassword,
+                            decoration: InputDecoration(
+                              labelText: 'Password (minimal 8 karakter)',
+                              prefixIcon: const Icon(Icons.lock_outline),
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                onPressed: () => setState(
+                                  () => hidePassword = !hidePassword,
+                                ),
+                                icon: Icon(
+                                  hidePassword
+                                      ? Icons.visibility
+                                      : Icons.visibility_off,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: busy ? null : submit,
+                            child: Text(
+                              busy
+                                  ? 'Memproses...'
+                                  : register ? 'Daftar akun' : 'Login',
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: busy
+                                ? null
+                                : () => setState(() {
+                                      register = !register;
+                                      notice = '';
+                                    }),
+                            child: Text(
+                              register
+                                  ? 'Sudah punya akun? Login'
+                                  : 'Belum punya akun? Daftar',
+                            ),
+                          ),
+                          if (notice.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text(
+                                notice,
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Demo produk digital. Tidak memproses '
+                            'uang sungguhan.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               );
             }
           }
 
           class Product {
-            Product({
-              required this.name,
-              required this.category,
-              required this.price,
-            });
-
+            Product(this.name, this.category, this.price);
             final String name;
             final String category;
             final int price;
@@ -100,57 +330,112 @@ jobs:
             State<MainPage> createState() => _MainPageState();
           }
 
-          class _MainPageState extends State<MainPage> {
+          class _MainPageState extends State<MainPage>
+              with WidgetsBindingObserver {
             int tab = 0;
             String category = 'Semua';
             String query = '';
+            bool locked = false;
+            bool hideBalance = true;
+            bool biometricAvailable = false;
+            bool checkingBiometric = false;
+
+            final auth = LocalAuthentication();
             final orders = <String>[];
             final complaints = <String>[];
             final products = <Product>[
-              Product(
-                name: 'Pulsa 10.000',
-                category: 'Pulsa',
-                price: 10000,
-              ),
-              Product(
-                name: 'Paket Data Demo',
-                category: 'Data',
-                price: 15000,
-              ),
-              Product(
-                name: 'Voucher Game Demo',
-                category: 'Game',
-                price: 20000,
-              ),
+              Product('Pulsa 10.000', 'Pulsa', 10000),
+              Product('Paket Data Demo', 'Data', 15000),
+              Product('Voucher Game Demo', 'Game', 20000),
             ];
 
-            Future<List<Product>> loadProducts() async {
-              if (!Supabase.instance.isInitialized) {
-                return products;
-              }
+            @override
+            void initState() {
+              super.initState();
+              WidgetsBinding.instance.addObserver(this);
+              checkBiometric();
+            }
 
+            @override
+            void dispose() {
+              WidgetsBinding.instance.removeObserver(this);
+              super.dispose();
+            }
+
+            @override
+            void didChangeAppLifecycleState(AppLifecycleState state) {
+              if (state == AppLifecycleState.inactive ||
+                  state == AppLifecycleState.paused ||
+                  state == AppLifecycleState.hidden) {
+                if (mounted) setState(() => locked = true);
+              }
+            }
+
+            Future<void> checkBiometric() async {
+              try {
+                final can = await auth.canCheckBiometrics;
+                final supported = await auth.isDeviceSupported();
+                if (mounted) {
+                  setState(() {
+                    biometricAvailable = can && supported;
+                  });
+                }
+              } catch (_) {
+                if (mounted) {
+                  setState(() => biometricAvailable = false);
+                }
+              }
+            }
+
+            Future<void> unlock() async {
+              if (checkingBiometric) return;
+              setState(() => checkingBiometric = true);
+              try {
+                final ok = await auth.authenticate(
+                  localizedReason: 'Buka kunci PINTJI PAY',
+                  options: const AuthenticationOptions(
+                    biometricOnly: true,
+                    stickyAuth: true,
+                  ),
+                );
+                if (mounted && ok) setState(() => locked = false);
+              } on PlatformException {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Biometrik gagal atau tidak tersedia di perangkat.',
+                      ),
+                    ),
+                  );
+                }
+              } finally {
+                if (mounted) setState(() => checkingBiometric = false);
+              }
+            }
+
+            Future<List<Product>> loadProducts() async {
+              if (!supabaseReady) return products;
               final rows = await Supabase.instance.client
                   .from('products')
                   .select('name, category, price')
                   .eq('is_active', true);
 
-              return rows.map<Product>((row) {
-                return Product(
-                  name: row['name'] as String,
-                  category: row['category'] as String,
-                  price: (row['price'] as num).toInt(),
-                );
-              }).toList();
+              return rows.map<Product>((row) => Product(
+                row['name'] as String,
+                row['category'] as String,
+                (row['price'] as num).toInt(),
+              )).toList();
             }
 
             String rupiah(int value) {
-              final digits = value.toString();
+              final s = value.toString();
               final out = StringBuffer();
-              for (var i = 0; i < digits.length; i++) {
-                if (i > 0 && (digits.length - i) % 3 == 0) {
+              for (var i = 0; i < s.length; i++) {
+                if (i > 0 && (s.length - i) % 3 == 0) {
                   out.write('.');
                 }
-                out.write(digits[i]);
+                out.write(s[i]);
               }
               return 'Rp$out';
             }
@@ -161,15 +446,68 @@ jobs:
               );
             }
 
+            Future<void> logout() async {
+              if (supabaseReady) {
+                await Supabase.instance.client.auth.signOut();
+              }
+            }
+
             @override
             Widget build(BuildContext context) {
-              final titles = [
-                'Beranda',
-                'Katalog',
-                'Pesanan',
-                'Dashboard Penjual',
-                'Pengaduan',
-              ];
+              if (locked) {
+                return Scaffold(
+                  body: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.lock,
+                            size: 72,
+                            color: Color(0xFF1769FF),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'PINTJI PAY terkunci',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Autentikasi perangkat diperlukan untuk '
+                            'membuka layar aplikasi lagi.',
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 20),
+                          if (biometricAvailable)
+                            FilledButton.icon(
+                              onPressed: checkingBiometric ? null : unlock,
+                              icon: const Icon(Icons.fingerprint),
+                              label: Text(
+                                checkingBiometric
+                                    ? 'Memeriksa...'
+                                    : 'Buka dengan biometrik',
+                              ),
+                            )
+                          else
+                            const Text(
+                              'Biometrik tidak tersedia. Tutup aplikasi '
+                              'dan login kembali untuk memulai sesi baru.',
+                              textAlign: TextAlign.center,
+                            ),
+                          TextButton(
+                            onPressed: logout,
+                            child: const Text('Logout akun'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }
 
               return Scaffold(
                 appBar: AppBar(
@@ -179,11 +517,29 @@ jobs:
                   ),
                   actions: [
                     IconButton(
-                      tooltip: 'Status demo',
-                      onPressed: () => message(
-                        'Mode demo: belum ada pembayaran nyata.',
+                      tooltip: 'Profil dan logout',
+                      onPressed: () => showModalBottomSheet<void>(
+                        context: context,
+                        builder: (ctx) => SafeArea(
+                          child: ListTile(
+                            leading: const Icon(Icons.person_outline),
+                            title: Text(
+                              supabaseReady
+                                  ? Supabase.instance.client.auth.currentUser
+                                          ?.email ??
+                                      'Akun demo'
+                                  : 'Mode demo',
+                            ),
+                            subtitle: const Text('Akun PINTJI PAY'),
+                          ),
+                        ),
                       ),
-                      icon: const Icon(Icons.info_outline),
+                      icon: const Icon(Icons.account_circle_outlined),
+                    ),
+                    IconButton(
+                      tooltip: 'Logout',
+                      onPressed: logout,
+                      icon: const Icon(Icons.logout),
                     ),
                   ],
                 ),
@@ -195,13 +551,12 @@ jobs:
                     orderPage(),
                     sellerPage(),
                     complaintPage(),
+                    securityPage(),
                   ],
                 ),
                 bottomNavigationBar: NavigationBar(
                   selectedIndex: tab,
-                  onDestinationSelected: (value) {
-                    setState(() => tab = value);
-                  },
+                  onDestinationSelected: (v) => setState(() => tab = v),
                   destinations: const [
                     NavigationDestination(
                       icon: Icon(Icons.home_outlined),
@@ -223,340 +578,261 @@ jobs:
                       icon: Icon(Icons.support_agent),
                       label: 'Bantuan',
                     ),
+                    NavigationDestination(
+                      icon: Icon(Icons.security),
+                      label: 'Keamanan',
+                    ),
                   ],
                 ),
               );
             }
 
-            Widget home() {
-              return ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(22),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Halo! Selamat datang'),
-                        SizedBox(height: 8),
-                        Text(
-                          'PINTJI PAY',
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Belanja produk digital dalam mode demo.',
-                        ),
-                      ],
-                    ),
+            Widget home() => ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Layanan',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      service(Icons.phone_android, 'Pulsa'),
-                      service(Icons.wifi, 'Data'),
-                      service(Icons.sports_esports, 'Game'),
+                      Text('Selamat datang'),
+                      SizedBox(height: 8),
+                      Text(
+                        'PINTJI PAY',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text('Versi 0.4 • Account Security'),
                     ],
                   ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Informasi',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const Text(
-                    'Saldo dan pembayaran nyata belum tersedia.',
-                  ),
-                ],
-              );
-            }
-
-            Widget service(IconData icon, String label) {
-              return SizedBox(
-                width: 100,
-                child: Card(
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () {
-                      setState(() {
-                        category = label == 'Pulsa'
-                            ? 'Pulsa'
-                            : label == 'Data'
-                                ? 'Data'
-                                : 'Game';
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Layanan demo',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.phone_android),
+                      label: const Text('Pulsa'),
+                      onPressed: () => setState(() {
+                        category = 'Pulsa';
                         tab = 1;
-                      });
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          Icon(icon, size: 30),
-                          const SizedBox(height: 8),
-                          Text(label),
-                        ],
+                      }),
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.wifi),
+                      label: const Text('Data'),
+                      onPressed: () => setState(() {
+                        category = 'Data';
+                        tab = 1;
+                      }),
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.sports_esports),
+                      label: const Text('Game'),
+                      onPressed: () => setState(() {
+                        category = 'Game';
+                        tab = 1;
+                      }),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.visibility_outlined),
+                    title: const Text('Saldo demo'),
+                    subtitle: Text(hideBalance ? '••••••' : 'Rp0 (demo)'),
+                    trailing: IconButton(
+                      icon: Icon(hideBalance
+                          ? Icons.visibility
+                          : Icons.visibility_off),
+                      onPressed: () => setState(
+                        () => hideBalance = !hideBalance,
                       ),
                     ),
                   ),
                 ),
-              );
-            }
+                const Text(
+                  'Saldo hanya tampilan demo, bukan uang tersimpan.',
+                ),
+              ],
+            );
 
-            Widget catalog() {
-              return Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
-                        hintText: 'Cari produk...',
-                        border: OutlineInputBorder(),
-                      ),
-                      onChanged: (value) {
-                        setState(() => query = value);
-                      },
+            Widget catalog() => Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      hintText: 'Cari produk...',
+                      border: OutlineInputBorder(),
                     ),
+                    onChanged: (v) => setState(() => query = v),
                   ),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        for (final c in [
-                          'Semua',
-                          'Pulsa',
-                          'Data',
-                          'Game',
-                        ])
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 4,
-                            ),
-                            child: ChoiceChip(
-                              label: Text(c),
-                              selected: category == c,
-                              onSelected: (_) {
-                                setState(() => category = c);
-                              },
-                            ),
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final c in ['Semua', 'Pulsa', 'Data', 'Game'])
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: ChoiceChip(
+                            label: Text(c),
+                            selected: category == c,
+                            onSelected: (_) => setState(() => category = c),
                           ),
-                      ],
-                    ),
+                        ),
+                    ],
                   ),
-                  Expanded(
-                    child: FutureBuilder<List<Product>>(
-                      future: loadProducts(),
-                      builder: (context, snapshot) {
-                        if (snapshot.hasError) {
-                          return const Center(
-                            child: Text(
-                              'Katalog gagal dimuat. Periksa konfigurasi Supabase.',
-                            ),
-                          );
-                        }
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
-                          );
-                        }
+                ),
+                Expanded(
+                  child: FutureBuilder<List<Product>>(
+                    future: loadProducts(),
+                    builder: (context, snap) {
+                      if (snap.hasError) {
+                        return const Center(
+                          child: Text('Katalog gagal dimuat dari Supabase.'),
+                        );
+                      }
+                      if (snap.connectionState == ConnectionState.waiting) {
+                        return const Center(
+                          child: CircularProgressIndicator(),
+                        );
+                      }
+                      final list = (snap.data ?? products).where((p) =>
+                        (category == 'Semua' ||
+                            p.category.toLowerCase() ==
+                                category.toLowerCase()) &&
+                        p.name.toLowerCase().contains(query.toLowerCase())
+                      ).toList();
 
-                        final list = (snapshot.data ?? products)
-                            .where((p) =>
-                                (category == 'Semua' ||
-                                    p.category.toLowerCase() ==
-                                        category.toLowerCase()) &&
-                                p.name.toLowerCase().contains(
-                                      query.toLowerCase(),
-                                    ))
-                            .toList();
-
-                        if (list.isEmpty) {
-                          return const Center(
-                            child: Text('Produk tidak ditemukan.'),
-                          );
-                        }
-
-                        return ListView.builder(
-                          itemCount: list.length,
-                          itemBuilder: (context, index) {
-                            final p = list[index];
-                            return Card(
-                              margin: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 5,
-                              ),
+                      if (list.isEmpty) {
+                        return const Center(
+                          child: Text('Produk tidak ditemukan.'),
+                        );
+                      }
+                      return ListView(
+                        children: [
+                          for (final p in list)
+                            Card(
                               child: ListTile(
-                                leading: const CircleAvatar(
-                                  child: Icon(Icons.shopping_bag),
-                                ),
+                                leading: const Icon(Icons.shopping_bag),
                                 title: Text(p.name),
                                 subtitle: Text(p.category),
                                 trailing: Text(rupiah(p.price)),
                                 onTap: () => showProduct(p),
                               ),
-                            );
-                          },
-                        );
-                      },
-                    ),
+                            ),
+                        ],
+                      );
+                    },
                   ),
-                ],
-              );
-            }
+                ),
+              ],
+            );
 
             void showProduct(Product p) {
               showModalBottomSheet<void>(
                 context: context,
-                builder: (context) => Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        p.name,
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
+                builder: (ctx) => SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          p.name,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(p.category),
-                      Text(rupiah(p.price)),
-                      const SizedBox(height: 18),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          onPressed: () {
-                            setState(() {
-                              orders.add(
+                        Text(p.category),
+                        Text(rupiah(p.price)),
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: () {
+                              setState(() => orders.add(
                                 '${p.name} — ${rupiah(p.price)} — SIMULASI',
-                              );
-                            });
-                            Navigator.pop(context);
-                            message(
-                              'Pesanan demo dibuat. Tidak ada uang yang dibayarkan.',
-                            );
-                          },
-                          child: const Text('Checkout simulasi'),
+                              ));
+                              Navigator.pop(ctx);
+                              message('Pesanan simulasi dibuat.');
+                            },
+                            child: const Text('Checkout simulasi'),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );
             }
 
-            Widget orderPage() {
-              if (orders.isEmpty) {
-                return const Center(
-                  child: Text('Belum ada pesanan demo.'),
-                );
-              }
-              return ListView(
-                padding: const EdgeInsets.all(12),
-                children: [
-                  for (final order in orders)
-                    Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.receipt_long),
-                        title: Text(order),
-                        subtitle: const Text(
-                          'Status: SIMULASI — belum dibayar',
+            Widget orderPage() => orders.isEmpty
+                ? const Center(child: Text('Belum ada pesanan demo.'))
+                : ListView(
+                    children: [
+                      for (final o in orders)
+                        ListTile(
+                          leading: const Icon(Icons.receipt_long),
+                          title: Text(o),
+                          subtitle: const Text('SIMULASI — belum dibayar'),
                         ),
-                      ),
-                    ),
-                ],
-              );
-            }
+                    ],
+                  );
 
-            Widget sellerPage() {
-              return ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  const Text(
-                    'Dashboard Penjual',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Demo lokal. Belum ada autentikasi atau '
-                    'penyimpanan penjual di backend.',
-                  ),
-                  const SizedBox(height: 18),
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.inventory_2),
-                      title: const Text('Kelola katalog demo'),
-                      subtitle: Text(
-                        '${products.length} produk contoh',
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: manageProducts,
-                    ),
-                  ),
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.receipt_long),
-                      title: const Text('Pesanan masuk'),
-                      subtitle: Text(
-                        '${orders.length} pesanan simulasi',
-                      ),
-                    ),
-                  ),
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.report_problem),
-                      title: const Text('Pengaduan'),
-                      subtitle: Text(
-                        '${complaints.length} pengaduan demo',
-                      ),
-                      onTap: () => setState(() => tab = 4),
-                    ),
-                  ),
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.gpp_maybe),
-                      title: const Text('Pembatasan akun'),
-                      subtitle: const Text(
-                        'Belum aktif — memerlukan admin terautentikasi',
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }
+            Widget sellerPage() => ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text(
+                  'Dashboard Penjual',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+                const Text('Data produk dan pesanan demo bersifat lokal.'),
+                ListTile(
+                  leading: const Icon(Icons.inventory_2),
+                  title: const Text('Tambah produk demo'),
+                  subtitle: Text('${products.length} produk contoh'),
+                  onTap: addProduct,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.receipt_long),
+                  title: const Text('Pesanan simulasi'),
+                  subtitle: Text('${orders.length} pesanan'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.support_agent),
+                  title: const Text('Pengaduan demo'),
+                  subtitle: Text('${complaints.length} pengaduan'),
+                  onTap: () => setState(() => tab = 4),
+                ),
+              ],
+            );
 
-            void manageProducts() {
+            void addProduct() {
               final name = TextEditingController();
               final price = TextEditingController();
               String cat = 'Game';
 
               showDialog<void>(
                 context: context,
-                builder: (dialogContext) => StatefulBuilder(
-                  builder: (context, setDialog) => AlertDialog(
+                builder: (ctx) => StatefulBuilder(
+                  builder: (ctx, refresh) => AlertDialog(
                     title: const Text('Tambah produk demo'),
                     content: SingleChildScrollView(
                       child: Column(
@@ -571,4 +847,209 @@ jobs:
                           TextField(
                             controller: price,
                             keyboardType: TextInputType.number,
-                            decoration
+                            decoration: const InputDecoration(
+                              labelText: 'Harga rupiah',
+                            ),
+                          ),
+                          DropdownButton<String>(
+                            value: cat,
+                            isExpanded: true,
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'Game',
+                                child: Text('Game'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'Pulsa',
+                                child: Text('Pulsa'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'Data',
+                                child: Text('Data'),
+                              ),
+                            ],
+                            onChanged: (v) {
+                              if (v != null) refresh(() => cat = v);
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Batal'),
+                      ),
+                      FilledButton(
+                        onPressed: () {
+                          final n = name.text.trim();
+                          final p = int.tryParse(price.text.trim());
+                          if (n.isEmpty || p == null || p < 0) {
+                            message('Nama atau harga tidak valid.');
+                            return;
+                          }
+                          setState(() => products.add(Product(n, cat, p)));
+                          Navigator.pop(ctx);
+                          message('Produk demo ditambahkan secara lokal.');
+                        },
+                        child: const Text('Tambah'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            Widget complaintPage() {
+              final controller = TextEditingController();
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Pusat Pengaduan Demo',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: controller,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        hintText: 'Jelaskan kendala...',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      onPressed: () {
+                        final text = controller.text.trim();
+                        if (text.isEmpty) {
+                          message('Isi pengaduan terlebih dahulu.');
+                          return;
+                        }
+                        setState(() => complaints.add(text));
+                        controller.clear();
+                        message('Pengaduan disimpan di demo lokal.');
+                      },
+                      child: const Text('Kirim pengaduan demo'),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Pengaduan belum dikirim ke server.'),
+                    Expanded(
+                      child: ListView(
+                        children: [
+                          for (final c in complaints)
+                            ListTile(
+                              leading: const Icon(Icons.message_outlined),
+                              title: Text(c),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            Widget securityPage() => ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text(
+                  'Keamanan Akun',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Lapisan keamanan perangkat dan sesi akun.',
+                ),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.fingerprint),
+                    title: const Text('Biometrik perangkat'),
+                    subtitle: Text(
+                      biometricAvailable
+                          ? 'Perangkat mendukung autentikasi biometrik'
+                          : 'Belum tersedia atau belum dikonfigurasi',
+                    ),
+                    trailing: const Icon(Icons.verified_user_outlined),
+                    onTap: checkBiometric,
+                  ),
+                ),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.lock_outline),
+                    title: const Text('Kunci aplikasi'),
+                    subtitle: const Text(
+                      'Aplikasi meminta biometrik setelah kembali dari latar belakang',
+                    ),
+                    onTap: () => setState(() => locked = true),
+                  ),
+                ),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.password),
+                    title: const Text('PIN transaksi 6 digit'),
+                    subtitle: const Text(
+                      'Belum aktif: memerlukan verifikasi backend yang aman',
+                    ),
+                  ),
+                ),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.devices),
+                    title: const Text('Manajemen perangkat'),
+                    subtitle: const Text(
+                      'Belum tersedia; perlu mekanisme sesi server',
+                    ),
+                  ),
+                ),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.phonelink_erase),
+                    title: const Text('Kehilangan perangkat'),
+                    subtitle: const Text(
+                      'Logout akun ini dari aplikasi',
+                    ),
+                    onTap: logout,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Catatan: pengunci biometrik adalah lapisan lokal, '
+                  'bukan pengganti autentikasi server. Gunakan kunci '
+                  'layar perangkat yang kuat.',
+                ),
+              ],
+            );
+          }
+          DART
+
+      - name: Configure Android biometric permission
+        run: |
+          cd pintji_pay
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          marker = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+          permission = '    <uses-permission android:name="android.permission.USE_BIOMETRIC" />\n'
+          if 'android.permission.USE_BIOMETRIC' not in s:
+              s = s.replace(marker, marker + '\n' + permission)
+          p.write_text(s)
+          PY
+
+      - name: Build release APK
+        env:
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          cd pintji_pay
+          flutter build apk --release \
+            --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pintji-pay-v04-security
+          path: pintji_pay/build/app/outputs/flutter-apk/app-release.apk
+
