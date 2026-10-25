@@ -1,0 +1,592 @@
+name: PINTJI PAY v0.4 Security Rebuild
+
+on:
+workflow_dispatch:
+push:
+branches: [main]
+
+permissions:
+contents: read
+
+jobs:
+build:
+runs-on: ubuntu-latest
+timeout-minutes: 30
+
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
+
+  - name: Setup Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: "17"
+
+  - name: Setup Flutter
+    uses: subosito/flutter-action@v2
+    with:
+      channel: stable
+      cache: true
+
+  - name: Create Flutter project
+    run: flutter create --platforms=android pintji_pay
+
+  - name: Add dependencies
+    working-directory: pintji_pay
+    run: |
+      flutter pub add supabase_flutter
+      flutter pub add local_auth
+
+  - name: Configure Android biometrics
+    working-directory: pintji_pay
+    shell: bash
+    run: |
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+
+      manifest = Path("android/app/src/main/AndroidManifest.xml")
+      s = manifest.read_text()
+      if "android.permission.USE_BIOMETRIC" not in s:
+          s = re.sub(
+              r'(<manifest\b[^>]*>)',
+              r'\1\n    <uses-permission android:name="android.permission.USE_BIOMETRIC" />',
+              s,
+              count=1
+          )
+          manifest.write_text(s)
+
+      files = list(Path("android/app/src").rglob("MainActivity.kt"))
+      if files:
+          p = files[0]
+          s = p.read_text()
+          s = s.replace(
+              "import io.flutter.embedding.android.FlutterActivity",
+              "import io.flutter.embedding.android.FlutterFragmentActivity"
+          )
+          s = s.replace(
+              "extends FlutterActivity",
+              "extends FlutterFragmentActivity"
+          )
+          s = s.replace(
+              ": FlutterActivity()",
+              ": FlutterFragmentActivity()"
+          )
+          p.write_text(s)
+          print("Configured:", p)
+      else:
+          java_files = list(Path("android/app/src").rglob("MainActivity.java"))
+          if java_files:
+              p = java_files[0]
+              s = p.read_text().replace(
+                  "import io.flutter.embedding.android.FlutterActivity;",
+                  "import io.flutter.embedding.android.FlutterFragmentActivity;"
+              ).replace(
+                  "extends FlutterActivity",
+                  "extends FlutterFragmentActivity"
+              )
+              p.write_text(s)
+              print("Configured:", p)
+          else:
+              raise SystemExit("MainActivity not found")
+      PY
+
+  - name: Create app
+    working-directory: pintji_pay
+    shell: bash
+    run: |
+      cat > lib/main.dart <<'DART'
+      import 'package:flutter/material.dart';
+      import 'package:flutter/services.dart';
+      import 'package:local_auth/local_auth.dart';
+      import 'package:supabase_flutter/supabase_flutter.dart';
+
+      const supabaseUrl = 'https://mnzkwajngdkwrylammqj.supabase.co';
+      const supabaseKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
+
+      Future<void> main() async {
+        WidgetsFlutterBinding.ensureInitialized();
+        if (supabaseKey.isNotEmpty) {
+          await Supabase.initialize(
+            url: supabaseUrl,
+            anonKey: supabaseKey,
+          );
+        }
+        runApp(const PintjiApp());
+      }
+
+      SupabaseClient get db => Supabase.instance.client;
+
+      class PintjiApp extends StatelessWidget {
+        const PintjiApp({super.key});
+
+        @override
+        Widget build(BuildContext context) => MaterialApp(
+          title: 'PINTJI PAY',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF2457D6),
+            ),
+          ),
+          home: supabaseKey.isEmpty
+              ? const SetupPage()
+              : const AuthGate(),
+        );
+      }
+
+      class SetupPage extends StatelessWidget {
+        const SetupPage({super.key});
+
+        @override
+        Widget build(BuildContext context) => const Scaffold(
+          body: Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Supabase belum dikonfigurasi. Tambahkan GitHub Actions '
+                'secret SUPABASE_PUBLISHABLE_KEY dan build ulang.',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        );
+      }
+
+      class AuthGate extends StatelessWidget {
+        const AuthGate({super.key});
+
+        @override
+        Widget build(BuildContext context) => StreamBuilder<AuthState>(
+          stream: db.auth.onAuthStateChange,
+          builder: (context, snapshot) {
+            if (db.auth.currentUser == null) return const LoginPage();
+            return const MainPage();
+          },
+        );
+      }
+
+      class LoginPage extends StatefulWidget {
+        const LoginPage({super.key});
+
+        @override
+        State<LoginPage> createState() => _LoginPageState();
+      }
+
+      class _LoginPageState extends State<LoginPage> {
+        final email = TextEditingController();
+        final password = TextEditingController();
+        bool registering = false;
+        bool busy = false;
+        bool obscure = true;
+
+        void showMessage(String value) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(value)),
+          );
+        }
+
+        Future<void> submit() async {
+          if (email.text.trim().isEmpty || password.text.length < 6) {
+            showMessage('Isi email dan password minimal 6 karakter.');
+            return;
+          }
+
+          setState(() => busy = true);
+          try {
+            if (registering) {
+              final result = await db.auth.signUp(
+                email: email.text.trim(),
+                password: password.text,
+              );
+              if (mounted && result.session == null) {
+                showMessage('Cek email untuk verifikasi akun jika diminta.');
+              }
+            } else {
+              await db.auth.signInWithPassword(
+                email: email.text.trim(),
+                password: password.text,
+              );
+            }
+          } on AuthException catch (e) {
+            showMessage(e.message);
+          } catch (e) {
+            showMessage('Login gagal: $e');
+          } finally {
+            if (mounted) setState(() => busy = false);
+          }
+        }
+
+        @override
+        void dispose() {
+          email.dispose();
+          password.dispose();
+          super.dispose();
+        }
+
+        @override
+        Widget build(BuildContext context) => Scaffold(
+          body: SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Icon(Icons.account_balance_wallet,
+                              size: 64, color: Color(0xFF2457D6)),
+                          const SizedBox(height: 12),
+                          const Text('PINTJI PAY',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 24),
+                          TextField(
+                            controller: email,
+                            keyboardType: TextInputType.emailAddress,
+                            decoration: const InputDecoration(
+                              labelText: 'Email',
+                              border: OutlineInputBorder(),
+                              prefixIcon: Icon(Icons.email_outlined),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: password,
+                            obscureText: obscure,
+                            decoration: InputDecoration(
+                              labelText: 'Password',
+                              border: const OutlineInputBorder(),
+                              prefixIcon: const Icon(Icons.lock_outline),
+                              suffixIcon: IconButton(
+                                onPressed: () =>
+                                    setState(() => obscure = !obscure),
+                                icon: Icon(obscure
+                                    ? Icons.visibility
+                                    : Icons.visibility_off),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          FilledButton(
+                            onPressed: busy ? null : submit,
+                            child: Text(busy
+                                ? 'Memproses...'
+                                : registering ? 'Daftar' : 'Masuk'),
+                          ),
+                          TextButton(
+                            onPressed: busy
+                                ? null
+                                : () => setState(
+                                    () => registering = !registering),
+                            child: Text(registering
+                                ? 'Sudah punya akun? Masuk'
+                                : 'Belum punya akun? Daftar'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      class Product {
+        final String name;
+        final String category;
+        final num price;
+
+        const Product({
+          required this.name,
+          required this.category,
+          required this.price,
+        });
+
+        factory Product.fromMap(Map<String, dynamic> map) => Product(
+          name: (map['name'] ?? 'Produk').toString(),
+          category: (map['category'] ?? 'Lainnya').toString(),
+          price: (map['price'] as num?) ?? 0,
+        );
+      }
+
+      class MainPage extends StatefulWidget {
+        const MainPage({super.key});
+
+        @override
+        State<MainPage> createState() => _MainPageState();
+      }
+
+      class _MainPageState extends State<MainPage>
+          with WidgetsBindingObserver {
+        int tab = 0;
+        bool locked = false;
+        bool showBalance = true;
+        bool loading = false;
+        List<Product> products = [];
+        final search = TextEditingController();
+        final auth = LocalAuthentication();
+        String category = 'Semua';
+
+        @override
+        void initState() {
+          super.initState();
+          WidgetsBinding.instance.addObserver(this);
+          loadProducts();
+        }
+
+        @override
+        void dispose() {
+          WidgetsBinding.instance.removeObserver(this);
+          search.dispose();
+          super.dispose();
+        }
+
+        @override
+        void didChangeAppLifecycleState(AppLifecycleState state) {
+          if (state == AppLifecycleState.paused ||
+              state == AppLifecycleState.hidden) {
+            if (mounted) setState(() => locked = true);
+          }
+        }
+
+        void message(String text) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(text)),
+          );
+        }
+
+        Future<void> loadProducts() async {
+          setState(() => loading = true);
+          try {
+            final rows = await db.from('products')
+                .select('name,category,price')
+                .eq('is_active', true)
+                .order('name');
+            if (mounted) {
+              setState(() {
+                products = (rows as List).map((row) =>
+                  Product.fromMap(Map<String, dynamic>.from(row as Map))
+                ).toList();
+              });
+            }
+          } catch (e) {
+            message('Katalog gagal dimuat. Periksa koneksi dan izin Supabase.');
+          } finally {
+            if (mounted) setState(() => loading = false);
+          }
+        }
+
+        Future<void> unlock() async {
+          try {
+            final supported = await auth.isDeviceSupported();
+            final canCheck = await auth.canCheckBiometrics;
+            if (!supported || !canCheck) {
+              message('Biometrik tidak tersedia di perangkat ini.');
+              return;
+            }
+            final ok = await auth.authenticate(
+              localizedReason: 'Verifikasi untuk membuka PINTJI PAY',
+              options: const AuthenticationOptions(
+                biometricOnly: true,
+                stickyAuth: true,
+              ),
+            );
+            if (ok && mounted) setState(() => locked = false);
+          } on PlatformException catch (e) {
+            message('Biometrik gagal: ${e.message ?? e.code}');
+          } catch (e) {
+            message('Gagal membuka aplikasi: $e');
+          }
+        }
+
+        Future<void> logout() async {
+          try {
+            await db.auth.signOut();
+          } catch (e) {
+            message('Gagal keluar: $e');
+          }
+        }
+
+        String money(num n) =>
+            'Rp ${n.toStringAsFixed(0).replaceAllMapped(
+              RegExp(r'\B(?=(\d{3})+(?!\d))'),
+              (m) => '.',
+            )}';
+
+        List<Product> get filtered => products.where((p) {
+          final cat = category == 'Semua' || p.category == category;
+          final q = p.name.toLowerCase().contains(
+            search.text.trim().toLowerCase(),
+          );
+          return cat && q;
+        }).toList();
+
+        Future<void> checkout(Product p) async {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Checkout demo'),
+              content: Text(
+                '${p.name}\n${money(p.price)}\n\n'
+                'Ini simulasi. Tidak ada pembayaran sungguhan.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Batal'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Lanjutkan demo'),
+                ),
+              ],
+            ),
+          );
+          if (ok == true) {
+            message('Simulasi selesai. Tidak ada uang yang dipotong.');
+          }
+        }
+
+        Widget homePage() {
+          final categories = <String>{
+            'Semua',
+            ...products.map((p) => p.category),
+          }.toList();
+
+          return RefreshIndicator(
+            onRefresh: loadProducts,
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Card(
+                  color: const Color(0xFF2457D6),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Saldo demo',
+                            style: TextStyle(color: Colors.white70)),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                showBalance ? 'Rp 0' : '••••••••',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              color: Colors.white,
+                              onPressed: () => setState(
+                                  () => showBalance = !showBalance),
+                              icon: Icon(showBalance
+                                  ? Icons.visibility
+                                  : Icons.visibility_off),
+                            ),
+                          ],
+                        ),
+                        const Text('Bukan saldo uang sungguhan.',
+                            style: TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text('Katalog produk',
+                    style: TextStyle(
+                        fontSize: 21, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: search,
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                    hintText: 'Cari produk...',
+                    prefixIcon: Icon(Icons.search),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  children: categories.map((c) => ChoiceChip(
+                    label: Text(c),
+                    selected: category == c,
+                    onSelected: (_) => setState(() => category = c),
+                  )).toList(),
+                ),
+                const SizedBox(height: 10),
+                if (loading)
+                  const Center(child: CircularProgressIndicator()),
+                if (!loading && filtered.isEmpty)
+                  const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text('Belum ada produk aktif di katalog.'),
+                    ),
+                  ),
+                ...filtered.map((p) => Card(
+                  child: ListTile(
+                    leading: const CircleAvatar(
+                      child: Icon(Icons.inventory_2_outlined),
+                    ),
+                    title: Text(p.name),
+                    subtitle: Text('${p.category} • ${money(p.price)}'),
+                    trailing: FilledButton(
+                      onPressed: () => checkout(p),
+                      child: const Text('Beli'),
+                    ),
+                  ),
+                )),
+              ],
+            ),
+          );
+        }
+
+        Widget sellerPage() => ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Text('Dashboard penjual',
+                style: TextStyle(
+                    fontSize: 22, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            const Card(
+              child: ListTile(
+                leading: Icon(Icons.storefront),
+                title: Text('Mode demo'),
+                subtitle: Text(
+                  'Katalog dibaca dari Supabase. Pengelolaan produk '
+                  'dan pesanan belum diaktifkan.',
+                ),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: loadProducts,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Muat ulang katalog'),
+            ),
+          ],
+        );
+
+        Widget supportPage() => ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Text('Bantuan',
+                style: TextStyle(
+                    fontSize: 22, fontWeight: FontWei
